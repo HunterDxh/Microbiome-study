@@ -1,0 +1,203 @@
+###Split group and unicox
+
+library(survival)
+library(caret)
+library(glmnet)
+library(survminer)
+library(timeROC)
+
+coxPfilter=0.05
+rt=read.table("expTime.txt", header=T, sep="\t", check.names=F, row.names=1)
+rt$futime[rt$futime<=0]=1
+rt$futime=rt$futime/365
+
+############????ɭ??ͼ????############
+bioForest=function(coxFile=null,forestFile=null,forestCol=null){
+	#??ȡ?????ļ?
+	rt <- read.table(coxFile,header=T,sep="\t",row.names=1,check.names=F)
+	gene <- rownames(rt)
+	hr <- sprintf("%.3f",rt$"HR")
+	hrLow  <- sprintf("%.3f",rt$"HR.95L")
+	hrHigh <- sprintf("%.3f",rt$"HR.95H")
+	Hazard.ratio <- paste0(hr,"(",hrLow,"-",hrHigh,")")
+	pVal <- ifelse(rt$pvalue<0.001, "<0.001", sprintf("%.3f", rt$pvalue))
+		
+	#????ͼ??
+	pdf(file=forestFile, width=8, height=7)
+	n <- nrow(rt)
+	nRow <- n+1
+	ylim <- c(1,nRow)
+	layout(matrix(c(1,2),nc=2),width=c(4,2.5))
+		
+	#????ɭ??ͼ???ߵ??ٴ???Ϣ
+	xlim = c(0,3)
+	par(mar=c(4,2.5,2,1))
+	plot(1,xlim=xlim,ylim=ylim,type="n",axes=F,xlab="",ylab="")
+	text.cex=0.8
+	text(0,n:1,gene,adj=0,cex=text.cex)
+	text(1.7,n:1,pVal,adj=1,cex=text.cex);text(1.7,n+1,'pvalue',cex=text.cex,adj=1)
+	text(3.1,n:1,Hazard.ratio,adj=1,cex=text.cex);text(3.1,n+1,'Hazard ratio',cex=text.cex,adj=1,)
+		
+	#????ɭ??ͼ
+	par(mar=c(4,1,2,1),mgp=c(2,0.5,0))
+	LOGindex = 10 
+	hrLow = log(as.numeric(hrLow),LOGindex)
+	hrHigh = log(as.numeric(hrHigh),LOGindex)
+	hr = log(as.numeric(hr),LOGindex)
+	xlim = c(floor(min(hrLow,hrHigh)),ceiling(max(hrLow,hrHigh)))
+	plot(1,xlim=xlim,ylim=ylim,type="n",axes=F,ylab="",xaxs="i",xlab="Hazard ratio")
+	arrows(as.numeric(hrLow),n:1,as.numeric(hrHigh),n:1,angle=90,code=3,length=0.05,col="darkblue",lwd=2.5)
+	abline(v=log(1,LOGindex),col="black",lty=2,lwd=2)
+	boxcolor = ifelse(as.numeric(hr) > log(1,LOGindex), forestCol[1],forestCol[2])
+	points(as.numeric(hr), n:1, pch = 15, col = boxcolor, cex=1.3)
+	a1 = axis(1,labels=F,tick=F)
+	axis(1,a1,10^a1)
+	dev.off()
+}
+############????ɭ??ͼ????############
+
+#?????ݽ??з??飬????ģ??
+n=1000      #????????Ŀ
+for(i in 1:n){
+	#############?????ݽ??з???#############
+	inTrain<-createDataPartition(y=rt[,2], p=0.5, list=F)
+	train<-rt[inTrain,]
+	test<-rt[-inTrain,]
+	trainOut=cbind(id=row.names(train),train)
+	testOut=cbind(id=row.names(test),test)
+	
+	#??????cox????
+	outUniTab=data.frame()
+	sigGenes=c("futime","fustat")
+	for(i in colnames(train[,3:ncol(train)])){
+		#cox????
+		cox <- coxph(Surv(futime, fustat) ~ train[,i], data = train)
+		coxSummary = summary(cox)
+		coxP=coxSummary$coefficients[,"Pr(>|z|)"]
+		outUniTab=rbind(outUniTab,
+				    cbind(id=i,
+					    HR=coxSummary$conf.int[,"exp(coef)"],
+					    HR.95L=coxSummary$conf.int[,"lower .95"],
+					    HR.95H=coxSummary$conf.int[,"upper .95"],
+					    pvalue=coxSummary$coefficients[,"Pr(>|z|)"]) )
+		#???浥?????????ԵĻ???
+		if(coxP<coxPfilter){
+		    sigGenes=c(sigGenes,i)
+		}
+	}
+	uniSigExp=train[,sigGenes]
+	uniSigExpOut=cbind(id=row.names(uniSigExp),uniSigExp)
+	if(ncol(uniSigExp)<6){next}
+	
+	#lasso?ع?
+	x=as.matrix(uniSigExp[,c(3:ncol(uniSigExp))])
+	y=data.matrix(Surv(uniSigExp$futime,uniSigExp$fustat))
+	fit <- glmnet(x, y, family = "cox", maxit = 1000)
+	cvfit <- cv.glmnet(x, y, family="cox", maxit = 1000)
+	coef <- coef(fit, s = cvfit$lambda.min)
+	index <- which(coef != 0)
+	actCoef <- coef[index]
+	lassoGene=row.names(coef)[index]
+	lassoSigExp=uniSigExp[,c("futime", "fustat", lassoGene)]
+	lassoSigExpOut=cbind(id=row.names(lassoSigExp), lassoSigExp)
+	geneCoef=cbind(Gene=lassoGene, Coef=actCoef)
+	if(nrow(geneCoef)<2){next}
+	
+	#############????COXģ??#############
+	multiCox <- coxph(Surv(futime, fustat) ~ ., data = lassoSigExp)
+	multiCox=step(multiCox, direction = "both")
+	multiCoxSum=summary(multiCox)
+	
+	#????ģ?͵Ĺ?ʽ
+	outMultiTab=data.frame()
+	outMultiTab=cbind(
+		               coef=multiCoxSum$coefficients[,"coef"],
+		               HR=multiCoxSum$conf.int[,"exp(coef)"],
+		               HR.95L=multiCoxSum$conf.int[,"lower .95"],
+		               HR.95H=multiCoxSum$conf.int[,"upper .95"],
+		               pvalue=multiCoxSum$coefficients[,"Pr(>|z|)"])
+	outMultiTab=cbind(id=row.names(outMultiTab),outMultiTab)
+	outMultiTab=outMultiTab[,1:2]
+	
+	#????train???????ļ?
+	riskScore=predict(multiCox,type="risk",newdata=train)
+	coxGene=rownames(multiCoxSum$coefficients)
+	coxGene=gsub("`","",coxGene)
+	outCol=c("futime","fustat",coxGene)
+	medianTrainRisk=median(riskScore)
+	risk=as.vector(ifelse(riskScore>medianTrainRisk,"high","low"))
+	trainRiskOut=cbind(id=rownames(cbind(train[,outCol],riskScore,risk)),cbind(train[,outCol],riskScore,risk))
+		
+	#????test???????ļ?
+	riskScoreTest=predict(multiCox,type="risk",newdata=test)
+	riskTest=as.vector(ifelse(riskScoreTest>medianTrainRisk,"high","low"))
+	testRiskOut=cbind(id=rownames(cbind(test[,outCol],riskScoreTest,riskTest)),cbind(test[,outCol],riskScore=riskScoreTest,risk=riskTest))
+	
+	#?Ƚϸߵͷ??????????????죬?õ???????pvalue	
+	diff=survdiff(Surv(futime, fustat) ~risk,data = train)
+	pValue=1-pchisq(diff$chisq, df=1)
+	diffTest=survdiff(Surv(futime, fustat) ~riskTest,data = test)
+	pValueTest=1-pchisq(diffTest$chisq, df=1)
+
+
+	#ROC??????????
+	predictTime=1    #Ԥ??ʱ??
+	roc=timeROC(T=train$futime, delta=train$fustat,
+	            marker=riskScore, cause=1,
+	            times=c(predictTime), ROC=TRUE)
+	rocTest=timeROC(T=test$futime, delta=test$fustat,
+	            marker=riskScoreTest, cause=1,
+	            times=c(predictTime), ROC=TRUE)	
+	
+	if((pValue<0.01) & (roc$AUC[2]>0.65) & (pValueTest<0.05) & (rocTest$AUC[2]>0.63)){
+		#????????????
+		write.table(trainOut,file="data.train.txt",sep="\t",quote=F,row.names=F)
+		write.table(testOut,file="data.test.txt",sep="\t",quote=F,row.names=F)
+		#?????????ؽ???
+		write.table(outUniTab,file="uni.cox.txt",sep="\t",row.names=F,quote=F)
+		outSigUniTab=outUniTab[as.numeric(as.vector(outUniTab$pvalue))<0.05,]
+		write.table(outSigUniTab,file="uni.coxSig.txt",sep="\t",row.names=F,quote=F)
+		write.table(uniSigExpOut,file="uni.sigExp.txt",sep="\t",row.names=F,quote=F)
+		bioForest(coxFile="uni.coxSig.txt",forestFile="uni.foreast.pdf",forestCol=c("red","green"))
+	    #lasso????
+	    write.table(lassoSigExpOut,file="lasso.SigExp.txt",sep="\t",row.names=F,quote=F)
+		pdf(file="lasso.lambda.pdf", width=7, height=7)
+		plot(fit, xvar = "lambda", label = TRUE)
+		dev.off()
+		pdf(file="lasso.cvfit.pdf", width=7, height=7)
+		plot(cvfit)
+		abline(v=log(c(cvfit$lambda.min,cvfit$lambda.1se)), lty="dashed")
+		dev.off()
+	    #?????????ؽ???
+		write.table(outMultiTab,file="multiCox.txt",sep="\t",row.names=F,quote=F)
+		#???з????ļ?
+		write.table(trainRiskOut,file="risk.train.txt",sep="\t",quote=F,row.names=F)
+		write.table(testRiskOut,file="risk.test.txt",sep="\t",quote=F,row.names=F)
+		allRiskOut=rbind(trainRiskOut, testRiskOut)
+		write.table(allRiskOut,file="risk.all.txt",sep="\t",quote=F,row.names=F)
+		break
+	}
+}
+
+###Volcano figure
+#??????????
+Sig=ifelse(rt$pvalue<pvalFilter, ifelse(rt$HR>1,"High risk","Low risk"), "Not")
+
+#???ƻ?ɽͼ
+rt = mutate(rt, Sig=Sig)
+p = ggplot(rt, aes(log2(HR), -log10(pvalue)))+
+    geom_point(aes(col=Sig))+
+    xlim(-1.5,1.5)+
+    scale_color_npg()+
+    labs(title = " ")+
+    theme(plot.title = element_text(size = 16, hjust = 0.5, face = "bold"))
+#??ͼ???б?ע???׵?????
+p=p+geom_label_repel(data=filter(rt, (pvalue<pvalFilter)), size=2,
+                     aes(label=id))
+p=p+theme_grey()
+#????ͼ??
+pdf(file="vol.pdf", width=6, height=5)
+print(p)
+dev.off()
+
+
