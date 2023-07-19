@@ -626,4 +626,735 @@ if(nrow(kkDown)>=termNum){
 }
 
 
+#??ȡ?????ļ?
+data=read.table(inputFile, header=T, sep="\t", row.names=1, check.names=F)
+data=rbind(rep(max(data),22), rep(0,22), data)
+
+#????????ϸ????˳??
+sortCellNames= c("B cells memory",
+			    "B cells naive",              
+				"Dendritic cells activated",
+				"Dendritic cells resting",     
+				"Eosinophils",
+				"Macrophages M0",              
+				"Macrophages M1",
+				"Macrophages M2",              
+				"Mast cells activated",
+				"NK cells resting",            
+				"Plasma cells",
+				"Mast cells resting", 
+				"T cells CD4 memory activated",
+				"T cells CD4 naive", 
+				"T cells CD4 memory resting",        
+				"Monocytes",
+				"Neutrophils",                 
+				"NK cells activated",           
+				"T cells CD8","T cells follicular helper",   
+				"T cells gamma delta",
+				"T cells regulatory (Tregs)")
+data=data[,sortCellNames]
+
+#??ȡ?????Ľ????ļ?,??????????
+corStat=read.table(diffFile, header=T, sep="\t", check.names=F, row.names=1)
+corStat=corStat[sortCellNames,]
+colnames(data)=paste0(colnames(data), corStat$sig)
+
+#?????״?ͼ
+pdf(file="radar.pdf", width=8, height=8)
+radarchart(data  , axistype=1 , 
+	pcol=c("#2B5F75", "#A36336"),       #??????ɫ
+	plwd=2,                      #????????
+	plty=1,                      #ѡ??????(2)??ʵ??(1)
+	cglcol="grey",               #??????????ɫ
+	cglty=1,                     #????????ѡ??????(2)??ʵ??(1)
+	cglwd=0.8,                   #??????????ϸ 
+	caxislabels=seq(0,1,0.05),   #?????Ŀ̶?
+	axislabcol="grey",           #?̶???ɫ
+	vlcex=0.75                   #??????С
+   )
+legend("topright", legend=rownames(data[-c(1,2),]), bty = "n", pch=20 , col=c("#2B5F75", "#A36336") ,cex=1.2, pt.cex=2)
+dev.off()
+
+#??ȡ?????????ļ????????????ļ?????
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+mat=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+mat=avereps(mat)
+mat=mat[rowMeans(mat)>0,]
+	
+#??ȡ???????ļ?
+geneSet=getGmt(gmtFile, geneIdType=SymbolIdentifier())
+	
+#ssgsea????
+ssgseaScore=gsva(mat, geneSet, method='ssgsea', kcdf='Gaussian', abs.ranking=TRUE)
+#????ssGSEA score????????
+normalize=function(x){
+	return((x-min(x))/(max(x)-min(x)))}
+#??ssGSEA score???н???
+ssgseaOut=normalize(ssgseaScore)
+ssgseaOut=rbind(id=colnames(ssgseaOut),ssgseaOut)
+write.table(ssgseaOut, file="ssgseaOut.txt", sep="\t", quote=F, col.names=F)
+
+
+#??ȡ???ͽ????ļ?
+Type=read.table(clusterFile, header=T, sep="\t", check.names=F, row.names=1)
+colnames(Type)=c("risk")
+Type=Type[order(Type[,"risk"],decreasing=T),,drop=F]
+Type$risk=factor(Type$risk, levels=unique(Type$risk))
+
+#??ȡ????΢?????????ļ?
+score=read.table(estimateFile, header=T, sep="\t", check.names=F, row.names=1)
+group=sapply(strsplit(colnames(score),"\\-"), "[", 4)
+group=sapply(strsplit(group,""), "[", 1)
+group=gsub("2", "1", group)
+score=score[,group==0]
+score=t(avereps(score))
+rownames(score)=gsub("(.*?)\\-(.*?)\\-(.*?)\\-.*", "\\1\\-\\2\\-\\3", rownames(score))
+score=score[,1:ncol(score)]
+score=avereps(score)
+sameSample=intersect(row.names(Type), row.names(score))
+score=score[sameSample,]
+Type=Type[row.names(score),,drop=F]
+#???ݺϲ?
+rt=cbind(Type, score)
+
+#???ϲ?????????ת??Ϊggplot2???????ļ?
+data=melt(rt, id.vars=c("risk"))
+colnames(data)=c("risk", "scoreType", "Score")
+
+#????С????ͼ
+p=ggviolin(data, x="scoreType", y="Score", fill = "risk",
+	     xlab="",
+	     ylab="GSVA",
+	     legend.title="Risk",
+	     add = "boxplot", add.params = list(color="white"),
+	     palette = c("blue","red"), width=1)
+p=p+rotate_x_text(80)
+p1=p+stat_compare_means(aes(group=risk),
+	      method="wilcox.test",
+	      symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+	      label = "p.signif")
+
+#????ͼ??
+pdf(file="vioplot.pdf", width=10, height=15)
+print(p1)
+dev.off()
+
+boxplot=ggboxplot(data, x="scoreType", y="Score", fill = "risk",
+                  xlab="",
+                  ylab="GSVA Results",
+                  legend.title="Risk",
+                  width=0.8,
+                  palette=c("#7CC767","#223D6C","#D20A13","#FFD121","#088247","#11AA4D"))+
+  rotate_x_text(80)+
+  stat_compare_means(aes(group=risk),symnum.args=list(cutpoints=c(0, 0.001, 0.01, 0.05, 1), symbols=c("***", "**", "*", "")), label="p.signif")
+
+#输出图片
+pdf(file="immune.diff.pdf", width=10, height=15)
+print(boxplot)
+
+
+dev.off()
+
+#??ȡ?????ļ????????????ļ?????????
+rt=read.table("risk.all.txt", header=T, sep="\t", check.names=F, row.names=1)
+data=rt[,(3:(ncol(rt)-2))]
+data=t(data)
+
+#????ģ?͵??׵ı???��????Ʒ???з???
+maxK=9     #??????kֵ(???????Խ???Ʒ?ֳɼ???????)
+results=ConsensusClusterPlus(data,
+              maxK=maxK,
+              reps=50,
+              pItem=0.8,
+              pFeature=1,
+              title=workDir,
+              clusterAlg="km",
+              distance="euclidean",
+              seed=123456,
+              plot="png")
+
+
+#????????
+clusterNum=3         #?ּ???, ????ǰ????ͼ???ж?
+Cluster=results[[clusterNum]][["consensusClass"]]
+outTab=cbind(rt, Cluster)
+outTab[,"Cluster"]=paste0("C", outTab[,"Cluster"])
+outTab=rbind(ID=colnames(outTab), outTab)
+write.table(outTab, file="cluster.txt", sep="\t", quote=F, col.names=F)
+
+#??ȡ?????ļ?
+rt=read.table(clusterFile, header=T, sep="\t", check.names=F, row.names=1)
+
+#???͵?????????????
+length=length(levels(factor(rt$Cluster)))
+diff=survdiff(Surv(futime, fustat) ~ Cluster, data = rt)
+pValue=1-pchisq(diff$chisq, df=length-1)
+if(pValue<0.001){
+	pValue="p<0.001"
+}else{
+	pValue=paste0("p=",sprintf("%.03f",pValue))
+}
+fit <- survfit(Surv(futime, fustat) ~ Cluster, data = rt)
+#print(surv_median(fit))
+
+#????????????
+bioCol=c("#0066FF","#FF9900","#00DB00","#FF0000","#7CC767","#223D6C","#D20A13","#FFD121","#088247","#11AA4D")
+bioCol=bioCol[1:length]
+surPlot=ggsurvplot(fit, 
+		           data=rt,
+		           conf.int=F,
+		           pval=pValue,
+		           pval.size=6,
+		           legend.title="Cluster",
+		           legend.labs=levels(factor(rt[,"Cluster"])),
+		           legend = c(0.8, 0.8),
+		           font.legend=10,
+		           xlab="Time(years)",
+		           break.time.by = 1,
+		           palette = bioCol,
+		           risk.table=T,
+		           cumevents=F,
+		           risk.table.height=.25)
+
+#????ͼ??
+pdf(file="survival.pdf", width=7, height=5.5, onefile=FALSE)
+print(surPlot)
+dev.off()
+
+#??ȡ????ϸ???????ļ??????????ݽ???????
+immune=read.table(immFile, header=T, sep="\t", check.names=F, row.names=1)
+immune=immune[immune[,"P-value"]<0.05,]
+data=as.matrix(immune[,1:(ncol(immune)-3)])
+
+#??ȡ?????ļ?
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+
+#?ߵͷ???????????ϸ??????
+lowSample=rownames(risk)[risk[,"risk"]=="Low"]
+highSample=rownames(risk)[risk[,"risk"]=="High"]
+lowSameSample=intersect(row.names(data),lowSample)
+highSameSample=intersect(row.names(data),highSample)
+dataLow=data[lowSameSample,]
+dataHigh=data[highSameSample,]
+data=rbind(dataLow, dataHigh)
+conNum=length(lowSameSample)
+treatNum=length(highSameSample)
+
+#??????ϸ??????ѭ??, ????????ͼ
+outTab=data.frame()
+data=as.data.frame(data)
+data=cbind(data,risk=c(rep("Low",conNum),rep("High",treatNum)))
+for(i in colnames(data)[1:(ncol(data)-1)]){
+	rt=data[,c(i,"risk")]
+	colnames(rt)=c("Immune","Risk")
+	if(sd(rt[,"Immune"])==0){rt[1,"Immune"]=0.00001}
+	#???ñȽ???
+	group=levels(factor(rt$Risk))
+	rt$Type=factor(rt$Risk, levels=group)
+	comp=combn(group,2)
+	my_comparisons=list()
+	for(j in 1:ncol(comp)){my_comparisons[[j]]<-comp[,j]}
+
+	#?????ߵͷ?????֮????????pvalue
+	wilcoxTest=wilcox.test(Immune ~ Risk, data=rt)
+	pvalue=wilcoxTest$p.value
+	sig=ifelse(pvalue<0.001,"***",ifelse(pvalue<0.01,"**",ifelse(pvalue<0.05,"*"," ")))
+	outTab=rbind(outTab, cbind(cell=i, pvalue, sig))
+
+	if(pvalue<0.05){
+		#????????ͼ
+		boxplot=ggboxplot(rt, x="Risk", y="Immune", fill="Risk",
+				          xlab="Risk score",
+				          ylab=i,
+				          legend.title="Risk",
+				          palette = c("blue","red") )+
+			stat_compare_means(comparisons=my_comparisons)
+		#????ͼ??
+		pdf(file=paste0("immuneCell.",i,".pdf"), width=5, height=4.5)
+		print(boxplot)
+		dev.off()
+	}
+}
+#?????????????Ľ???
+write.table(outTab, file="diff.txt", sep="\t", row.names=F, quote=F)
+
+#?????״?ͼ???????ļ?
+radar=rbind(colMeans(dataLow), colMeans(dataHigh))
+row.names(radar)=c("Low", "High")
+radarOut=cbind(id=rownames(radar), radar)
+write.table(radarOut, file="radarInput.txt", sep="\t", quote=F, row.names=F)
+
+library("limma")            #???ð?
+inputFile="ssgseaOut.txt"      #?????????ļ?
+setwd("D:\\BaiduNetdiskDownload\\BaiduSyncdisk\\生信文章\\微生物组\\30.1 glycosisdiff")        #???ù???Ŀ¼
+
+#??ȡ?????ļ????????????ļ?????
+rt=read.table(inputFile, header=T, sep="\t", check.names=F)        #??ȡ?????ļ?
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+data=data[rowMeans(data)>0,]
+
+#????ת??
+#v=voom(data, plot=F, save.plot=F)
+#out=v$E
+out=rbind(ID=colnames(data),data)
+write.table(out,file="uniq.symbol.txt",sep="\t",quote=F,col.names=F)        #?????ļ?
+
+#????CIBERSORT???õ?????ϸ????  ????
+source("ssGSEA18.CIBERSORT.R")
+results=CIBERSORT("ref.txt", "uniq.symbol.txt", perm=1000, QN=TRUE)
+
+library(reshape2)
+library(ggpubr)
+cluFile="Cluster.txt"               #分型结果文件
+pFilter=0.05            #免疫细胞浸润结果的过滤条件
+immFile="ssgseaOut.txt"     #免疫细胞浸润结果文件
+#读取分型结果文件
+Type=read.table(cluFile, header=T, sep="\t", check.names=F, row.names=1)
+colnames(Type)=c("Cluster")
+Type=Type[order(Type[,"Cluster"],decreasing=F),,drop=F]
+Type$Cluster=factor(Type$Cluster, levels=unique(Type$Cluster))
+
+#读取免疫细胞结果文件，并对数据进行整理
+immune=read.table(immFile, header=T, sep="\t", check.names=F, row.names=1)
+#immune=immune[immune[,"P-value"]<pFilter,]
+immune=as.matrix(immune[,1:(ncol(immune))])
+immune=t(immune)
+#数据合并
+sameSample=intersect(row.names(immune), row.names(Type))
+rt=cbind(immune[sameSample,,drop=F], Type[sameSample,,drop=F])
+
+#把数据转换成ggplot2输入文件
+data=melt(rt, id.vars=c("Cluster"))
+colnames(data)=c("Cluster", "Immune", "Expression")
+
+#绘制箱线图
+boxplot=ggboxplot(data, x="Immune", y="Expression", fill="Cluster",
+                  xlab="",
+                  ylab="Fraction",
+                  legend.title="Cluster",
+                  width=0.8,
+                  palette=c("#525288","#fed71a","#e16723","#11AA4D"))+theme_grey()+
+  rotate_x_text(50)+
+  stat_compare_means(aes(group=Cluster),symnum.args=list(cutpoints=c(0, 0.001, 0.01, 0.05, 1), symbols=c("***", "**", "*", "")), label="p.signif")
+
+#输出图片
+pdf(file="immune.diff.pdf", width=15, height=12)
+print(boxplot)
+
+
+dev.off()
+
+clusterFile="cluster.txt"      #???ͽ????ļ?
+cliFile="time.txt"             #?????????ļ?
+setwd("G:\\BaiduNetdiskDownload\\BaiduNetdiskWorkspace\\生信文章\\微生物组\\30.glycosisclustersurv")      #???ù???Ŀ¼
+
+#??ȡ?????ļ?
+cluster=read.table(clusterFile, header=T, sep="\t", check.names=F, row.names=1)
+cli=read.table(cliFile, header=T, sep="\t", check.names=F, row.names=1)
+colnames(cli)=c("futime", "fustat")
+cli$futime=cli$futime/365
+
+#???ݺϲ?
+sameSample=intersect(row.names(cluster), row.names(cli))
+rt=cbind(cli[sameSample,,drop=F], cluster[sameSample,,drop=F])
+
+#????????ͳ??
+length=length(levels(factor(rt$Cluster)))
+diff=survdiff(Surv(futime, fustat) ~ Cluster, data = rt)
+pValue=1-pchisq(diff$chisq, df=length-1)
+if(pValue<0.001){
+	pValue="p<0.001"
+}else{
+	pValue=paste0("p=",sprintf("%.03f",pValue))
+}
+fit <- survfit(Surv(futime, fustat) ~ Cluster, data = rt)
+#print(surv_median(fit))
+
+#????????????
+#绘制生存曲线
+bioCol=c("#525288","#fed71a","#e16723","#FFD121","#088247","#11AA4D")
+bioCol=bioCol[1:length]
+surPlot=ggsurvplot(fit, 
+                   data=rt,
+                   conf.int=F,
+                   size=0.5,
+                   pval=pValue,
+                   pval.size=6,
+                   legend.title="Cluster",
+                   legend.labs=levels(factor(rt[,"Cluster"])),
+                   legend = c(0.8, 0.8),
+                   font.legend=10,
+                   xlab="Time(years)",
+                   ylab="Overall survival",
+                   ggtheme=theme_light(),
+                   break.time.by = 5,
+                   palette = bioCol,
+                   surv.median.line = "hv",
+                   risk.table=T,
+                   cumevents=F,
+                   risk.table.height=.3,
+                   font.title    = c(16, "bold", "darkblue"),#用长度为3的向量分别指定大小、类型、颜色
+                   font.subtitle = c(15, "bold.italic", "purple"),
+                   font.caption  = c(14, "plain", "orange"),
+                   font.x        = c(14, "bold.italic", "red"),
+                   font.y        = c(14, "bold.italic", "darkred"),
+                   font.xtickslab = c(12, "plain", "darkgreen"))
+pdf(file="survival.pdf",onefile = FALSE,width=7,height=6)
+print(surPlot)
+dev.off()
+
+clusterFile="cluster.txt"          #分型结果文件
+estimateFile="Stemnessscore.txt"       #肿瘤微环境打分文件
+
+Type=read.table(clusterFile, header=T, sep="\t", check.names=F, row.names=1)
+score=read.table(estimateFile, header=F, sep="\t", check.names=F, row.names=1)
+
+colnames(Type)=c("Cluster")
+Type=Type[order(Type[,"Cluster"],decreasing=F),,drop=F]
+Type$Cluster=factor(Type$Cluster, levels=unique(Type$Cluster))
+
+score=score[row.names(Type),,drop=F]
+
+#数据合并
+rt=cbind(Type, score)
+
+library(reshape2)
+library(ggpubr)
+library(ggprism)
+library(ggsci)
+#将合并后的数据转换为ggplot2的输入文件
+#data=melt(rt, id.vars=c("Cluster"))
+colnames(rt)=c("Cluster", "Stemness")
+#设置比较租
+group=levels(factor(rt$Cluster))
+rt$Cluster=factor(rt$Cluster, levels=group)
+comp=combn(group,2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+#绘制小提琴图
+p=ggboxplot(rt, x="Cluster", y="Stemness", 
+           xlab="",
+           ylab="Stemness",
+           legend.title="Cluster",
+           add = "jitter", color="Cluster",
+           palette = c("#525288","#fed71a","#e16723","#11AA4D"), width=1)
+p=p+rotate_x_text(45)
+p1=p+
+  stat_compare_means(comparisons = my_comparisons,symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", " ")),
+                     label = "p.signif")+ theme_prism()+theme_grey()
+
+#输出图形
+pdf(file="vioplot.pdf", width=5, height=4)
+print(p1)
+dev.off()
+
+#读取表达数据文件，并对数据进行处理
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp), colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)), nrow=nrow(exp), dimnames=dimnames)
+data=t(data)
+data=avereps(data)
+data=data[rowMeans(data)>0,]
+
+#读取基因列表文件, 提取LLPS基因的表达量
+gene=read.table(geneFile, header=F, sep="\t", check.names=F)
+sameGene=intersect(as.vector(gene[,1]), rownames(data))
+geneExp=data[sameGene,]
+geneExp=t(geneExp)
+#输出LLPS基因的表达量
+out=rbind(ID=colnames(geneExp), geneExp)
+write.table(out, file="cluster1exp.txt", sep="\t", quote=F, col.names=F)
+
+library(WGCNA)
+expFile="merge.txt"      #表达数据文件
+cliFile="clinical.txt"        #临床数据文件
+#读取输入文件，并对输入文件进行整理
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)), nrow=nrow(exp), dimnames=dimnames)
+data=avereps(data)
+data=data[apply(data,1,sd)>0,]     #删除波动小的基因
+data=t(data)
+datExpr0=avereps(data)
+###检查缺失值
+gsg = goodSamplesGenes(datExpr0, verbose = 3)
+if (!gsg$allOK){
+  # Optionally, print the gene and sample names that were removed:
+  if (sum(!gsg$goodGenes)>0)
+    printFlush(paste("Removing genes:", paste(names(datExpr0)[!gsg$goodGenes], collapse = ", ")))
+  if (sum(!gsg$goodSamples)>0)
+    printFlush(paste("Removing samples:", paste(rownames(datExpr0)[!gsg$goodSamples], collapse = ", ")))
+  # Remove the offending genes and samples from the data:
+  datExpr0 = datExpr0[gsg$goodSamples, gsg$goodGenes]
+}
+
+###样品聚类
+sampleTree = hclust(dist(datExpr0), method = "average")
+pdf(file = "1_sample_cluster.pdf", width = 12, height = 9)
+par(cex = 0.6)
+par(mar = c(0,4,2,0))
+plot(sampleTree, main = "Sample clustering to detect outliers", sub="", xlab="", cex.lab = 1.5, cex.axis = 1.5, cex.main = 2)
+###剪切线
+abline(h = 150, col = "red")
+dev.off()
+
+###删除剪切线以下的样品
+clust = cutreeStatic(sampleTree, cutHeight = 150, minSize = 10)
+table(clust)
+keepSamples = (clust==1)
+datExpr0 = datExpr0[keepSamples, ]
+###power值散点图
+enableWGCNAThreads()   #多线程工作
+powers = c(1:20)       #幂指数范围1:20
+sft = pickSoftThreshold(datExpr0, powerVector = powers, verbose = 5)
+pdf(file="2_scale_independence.pdf",width=9,height=5)
+par(mfrow = c(1,2))
+cex1 = 0.9
+###拟合指数与power值散点图
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+     main = paste("Scale independence"));
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels=powers,cex=cex1,col="red");
+abline(h=0.90,col="red") #可以修改
+###平均连通性与power值散点图
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+     xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+dev.off()
+
+###邻接矩阵转换
+sft #查看最佳power值
+softPower =sft$powerEstimate   #最佳power值
+adjacency = adjacency(datExpr0, power = softPower)
+softPower
+
+###TOM矩阵
+TOM = TOMsimilarity(adjacency)
+dissTOM = 1-TOM
+
+###基因聚类
+geneTree = hclust(as.dist(dissTOM), method = "average");
+pdf(file="3_gene_clustering.pdf",width=12,height=9)
+plot(geneTree, xlab="", sub="", main = "Gene clustering on TOM-based dissimilarity",
+     labels = FALSE, hang = 0.04)
+dev.off()
+
+
+###动态剪切模块识别
+minModuleSize=250      #模块基因数目,每个模块最少包含多少个基因
+dynamicMods = cutreeDynamic(dendro = geneTree, distM = dissTOM,
+                            deepSplit = 2, pamRespectsDendro = FALSE,
+                            minClusterSize = minModuleSize);
+table(dynamicMods)
+dynamicColors = labels2colors(dynamicMods)
+table(dynamicColors)
+pdf(file="4_Dynamic_Tree.pdf",width=8,height=6)
+plotDendroAndColors(geneTree, dynamicColors, "Dynamic Tree Cut",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05,
+                    main = "Gene dendrogram and module colors")
+dev.off()
+
+###查找相似模块聚类
+MEList = moduleEigengenes(datExpr0, colors = dynamicColors)
+MEs = MEList$eigengenes
+MEDiss = 1-cor(MEs);
+METree = hclust(as.dist(MEDiss), method = "average")
+pdf(file="5_Clustering_module.pdf",width=7,height=7)
+plot(METree, main = "Clustering of module eigengenes",
+     xlab = "", sub = "")
+MEDissThres = 0.1  #剪切高度可修改
+#abline(h=MEDissThres, col = "red")
+dev.off()
+
+###相似模块合并
+merge = mergeCloseModules(datExpr0, dynamicColors, cutHeight = MEDissThres, verbose = 3)
+mergedColors = merge$colors
+mergedMEs = merge$newMEs
+pdf(file="6_merged_dynamic.pdf", width = 9, height = 6)
+plotDendroAndColors(geneTree, mergedColors,"Dynamic Tree Cut",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05,
+                    main = "Gene dendrogram and module colors")
+dev.off()
+moduleColors = mergedColors
+table(moduleColors)
+colorOrder = c("grey", standardColors(50))
+moduleLabels = match(moduleColors, colorOrder)-1
+MEs = mergedMEs
+
+
+###模块与临床性状的相关型热图
+cli=read.table(cliFile, header=T, sep="\t", check.names=F, row.names=1)
+sameSample=intersect(row.names(cli), row.names(MEs))
+MEs=MEs[sameSample,]
+datTraits=cli[sameSample,]
+nGenes = ncol(datExpr0)
+nSamples = nrow(datExpr0)
+moduleTraitCor = cor(MEs, datTraits, use = "p")
+moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples)
+pdf(file="7_Module_trait.pdf", width=6.5, height=5.5)
+textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
+                   signif(moduleTraitPvalue, 1), ")", sep = "")
+dim(textMatrix) = dim(moduleTraitCor)
+par(mar = c(10, 10, 3, 3))
+labeledHeatmap(Matrix = moduleTraitCor,
+               xLabels = names(datTraits),
+               yLabels = names(MEs),
+               ySymbols = names(MEs),
+               colorLabels = FALSE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrix,
+               setStdMargins = FALSE,
+               cex.text = 0.5,
+               zlim = c(-1,1),
+               main = paste("Module-trait relationships"))
+dev.off()
+
+###基因所在的模块
+probes = colnames(datExpr0)
+geneInfo0 = data.frame(probes= probes,
+                       moduleColor = moduleColors)
+geneOrder =order(geneInfo0$moduleColor)
+geneInfo = geneInfo0[geneOrder, ]
+write.table(geneInfo, file = "allModules.txt",sep="\t",row.names=F,quote=F)
+
+
+###输出每个模块的基因
+for (mod in 1:nrow(table(moduleColors))){  
+  modules = names(table(moduleColors))[mod]
+  probes = colnames(datExpr0)
+  inModule = (moduleColors == modules)
+  modGenes = probes[inModule]
+  write.table(modGenes, file =paste0("module_",modules,".txt"),sep="\t",row.names=F,col.names=F,quote=F)
+}
+
+rm(list=ls())
+
+
+lapply(c("dplyr","Seurat","HGNChelper"), library, character.only = T)
+library(tidyverse)
+library(Matrix)
+counts <- readMM("D:\\BaiduNetdiskDownload\\BaiduSyncdisk\\生信文章\\微生物组\\56.singlecell\\matrix.mtx")
+# Read in `genes.tsv`
+genes <- read_tsv("D:\\BaiduNetdiskDownload\\BaiduSyncdisk\\生信文章\\微生物组\\56.singlecell\\features.tsv", col_names = FALSE)
+gene_ids <- genes$X2
+# Read in `barcodes.tsv`
+cells <- read_tsv("D:\\BaiduNetdiskDownload\\BaiduSyncdisk\\生信文章\\微生物组\\56.singlecell\\barcodes.tsv", col_names = FALSE)
+cell_ids <- cells$X1
+# Create a sparse matrix for more efficient computation
+counts <- as(counts, "dgCMatrix")
+
+# Make the column names as the cell IDs and the row names as the gene IDs
+rownames(counts) <- gene_ids
+colnames(counts) <- cell_ids
+counts <-as.data.frame(counts)
+####################################################################################
+scRNA <- CreateSeuratObject(counts)
+
+# normalize data
+scRNA[["percent.mt"]] <- PercentageFeatureSet(scRNA, pattern = "^MT-")
+scRNA <- NormalizeData(scRNA, normalization.method = "LogNormalize", scale.factor = 10000)
+scRNA <- FindVariableFeatures(scRNA, selection.method = "vst", nfeatures = 2000)
+
+# scale and run PCA
+scRNA <- ScaleData(scRNA, features = rownames(scRNA))
+scRNA <- RunPCA(scRNA, features = VariableFeatures(object = scRNA))
+
+# Check number of PC components (we selected 10 PCs for downstream analysis, based on Elbow plot)
+ElbowPlot(scRNA)
+
+# cluster and visualize
+scRNA <- FindNeighbors(scRNA, dims = 1:15)
+scRNA <- FindClusters(scRNA, resolution = 0.8)
+scRNA <- RunUMAP(scRNA, dims = 1:15)
+DimPlot(scRNA, reduction = "umap")
+
+# load gene set preparation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+# load cell type annotation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+
+# DB file
+db_ = "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx";
+tissue = "Immune system" # e.g. Immune system,Pancreas,Liver,Eye,Kidney,Brain,Lung,Adrenal,Heart,Intestine,Muscle,Placenta,Spleen,Stomach,Thymus 
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = scRNA[["RNA"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+# NOTE: scRNAseqData parameter should correspond to your input scRNA-seq matrix. 
+# In case Seurat is used, it is either scRNA[["RNA"]]@scale.data (default), scRNA[["SCT"]]@scale.data, in case sctransform is used for normalization,
+# or scRNA[["integrated"]]@scale.data, in case a joint analysis of multiple single-cell datasets is performed.
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(scRNA@meta.data$seurat_clusters), function(cl){
+  es.max.cl = sort(rowSums(es.max[ ,rownames(scRNA@meta.data[scRNA@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+  head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(scRNA@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+scRNA@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  scRNA@meta.data$customclassif[scRNA@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+pdf(file="plot.pdf", width=8, height=6.5) 
+DimPlot(scRNA, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif') 
+dev.off()
+
+###提取细胞典型基因
+diff.wilcox = FindAllMarkers(scRNA)
+all.markers = diff.wilcox %>% select(gene, everything()) %>% subset(p_val<0.05)
+top10 = all.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.csv(all.markers, "subcluster_diff_genes_wilcox.csv", row.names = F)
+write.csv(top10, "subcluster_top10_diff_genes_wilcox.csv", row.names = F)
+
+###Gly-lactate signature
+GL.genes <- c("ISCU","IRX2","SLCO4C1","CCDC28A","RAPGEF6","RPS6KA3","SLC2A13","EIF4E3","BBS5","ZNF319","LIPT1","SLC26A11","ASTE1","MLLT1","ASCC1","EHBP1","GJB3","RHOV","SLC2A1")
+sce <- PercentageFeatureSet(scRNA,features = GL.genes,col.name = 'Glycosis_lactate_score')
+pdf(file="plot2.pdf", width=8, height=6.5)
+FeaturePlot(sce,'Glycosis_lactate_score')
+dev.off()
+
+
+###小提琴图
+#my_comparisons <- list(c('Naive CD4 T','B'),c('Memory CD4 T','B'))
+library(ggpubr)
+pdf(file="plot3.pdf", width=8, height=6.5)
+ggviolin(scRNA@meta.data, x = "customclassif", y = "Glycosis_lactate_score",
+                         color = "customclassif",add = 'mean_sd',fill = 'customclassif',
+                         add.params = list(color = "black")) + 
+  scale_color_manual() + 
+  scale_fill_manual() +
+  theme(axis.text.x.bottom = element_text(angle = 90,vjust = 0.5,hjust = 1)) + 
+  NoLegend() + labs(x = '')
+dev.off()
+write.table(sce@meta.data, file="outTab.txt", sep="\t", quote=F, col.names=T)
+
 
