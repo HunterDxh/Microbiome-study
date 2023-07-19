@@ -200,4 +200,430 @@ pdf(file="vol.pdf", width=6, height=5)
 print(p)
 dev.off()
 
+library(limma)
+library(scatterplot3d)
+#library(pcaMethods)
+
+#定义PCA分析函数
+myPCA=function(input=null, output=null){
+  #读取表达数据文件
+  rt=read.table(input, header=T, sep="\t", check.names=F)
+  rt=as.matrix(rt)
+  rownames(rt)=rt[,1]
+  exp=rt[,2:ncol(rt)]
+  dimnames=list(rownames(exp),colnames(exp))
+  data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+  data=t(avereps(data))
+  
+  #读取risk风险文件
+  risk=read.table("risk.all.txt", header=T, sep="\t", row.names=1, check.names=F)
+  sameSample=intersect(rownames(data),rownames(risk))
+  data=data[sameSample,]
+  risk=risk[sameSample,]
+  group=as.vector(risk[,"risk"])
+  
+  #PCA分析
+  data.class <- rownames(data)
+  data.pca <- prcomp(data)
+  pcaPredict=predict(data.pca)
+  
+  # 计算R2值
+  variance_explained <- data.pca$sdev^2
+  total_variance <- sum(variance_explained)
+  R2 <- variance_explained / total_variance
+  
+  # 计算Q2值（交叉验证预测能力）
+  n_samples <- nrow(data)
+  n_components <- min(ncol(data), n_samples)
+  cross_val_scores <- pcaMethods::cvpca(data, ncomp = n_components)$Q2
+  
+  # 输出R2和Q2值
+  cat("R2 values:", R2, "\n")
+  cat("Q2 values:", cross_val_scores, "\n")
+  
+  #绘制PCA图形
+  color=ifelse(group=="low", 4, 2)
+  pdf(file=output, width=6.5, height=6)
+  par(oma=c(1,1,2.5,1))
+  s3d=scatterplot3d(pcaPredict[,1:3], pch = 16, color=color, angle=45)
+  legend("top", legend = c("Low risk","High risk"),pch = 16, inset = -0.2, box.col="white", xpd = TRUE, horiz = TRUE,col=c(4,2))
+  dev.off()
+}
+
+######调用函数,绘制所有蛋白的PCA图
+myPCA(input="data_microbiome.txt", output="PCA.all.pdf")
+
+######读取风险文件,绘制模型蛋白的PCA图
+risk=read.table("risk.all.txt", header=T, sep="\t", check.names=F, row.names=1)
+data=risk[,3:(ncol(risk)-2)]
+group=as.vector(risk[,"risk"])
+
+#PCA分析
+data.class <- rownames(data)
+data.pca <- prcomp(data)
+pcaPredict=predict(data.pca)
+
+# 计算R2值
+variance_explained <- data.pca$sdev^2
+total_variance <- sum(variance_explained)
+R2 <- variance_explained / total_variance
+
+# 计算Q2值（交叉验证预测能力）
+n_samples <- nrow(data)
+n_components <- min(ncol(data), n_samples)
+cross_val_scores <- pcaMethods::cvpca(data, ncomp = n_components)$Q2
+
+# 输出R2和Q2值
+cat("R2 values:", R2, "\n")
+cat("Q2 values:", cross_val_scores, "\n")
+
+#可视化
+color=ifelse(group=="low", 4, 2)
+pdf(file="PCA.risk.pdf", width=6.5, height=6)
+par(oma=c(1,1,2.5,1))
+s3d=scatterplot3d(pcaPredict[,1:3], pch = 16, color=color, angle=45)
+legend("top", legend = c("Low risk","High risk"),pch = 16, inset = -0.2, box.col="white", xpd = TRUE, horiz = TRUE,col=c(4,2))
+dev.off()
+
+#?????????????ĺ???
+bioSurvival=function(inputFile=null, outFile=null){
+	#??ȡ?????ļ?
+	rt=read.table(inputFile, header=T, sep="\t", check.names=F)
+	#?Ƚϸߵͷ??????????????죬?õ???????pֵ
+	diff=survdiff(Surv(futime, fustat) ~risk,data = rt)
+	pValue=1-pchisq(diff$chisq,df=1)
+	if(pValue<0.001){
+		pValue="p<0.001"
+	}else{
+		pValue=paste0("p=",sprintf("%.03f",pValue))
+	}
+	fit <- survfit(Surv(futime, fustat) ~ risk, data = rt)
+	
+	#????????????
+	surPlot=ggsurvplot(fit, 
+		           data=rt,
+		           conf.int=F,
+		           pval=pValue,
+		           pval.size=6,
+		           legend.title="Risk",
+		           legend.labs=c("High risk", "Low risk"),
+		           xlab="Time(years)",
+		           ylab="Overall survival",
+		           ggtheme=theme_light(),
+		           break.time.by = 5,
+		           palette = c("#7CC767","#223D6C"),
+		           surv.median.line = "hv",
+		           risk.table=T,
+		           cumevents=F,
+		           risk.table.height=.3,
+		           font.title    = c(16, "bold", "darkblue"),#用长度为3的向量分别指定大小、类型、颜色
+		           font.subtitle = c(15, "bold.italic", "purple"),
+		           font.caption  = c(14, "plain", "orange"),
+		           font.x        = c(14, "bold.italic", "red"),
+		           font.y        = c(14, "bold.italic", "darkred"),
+		           font.xtickslab = c(12, "plain", "darkgreen"))
+	
+	#????ͼ??
+	pdf(file=outFile, width=6.5, height=5.5, onefile=FALSE)
+	print(surPlot)
+	dev.off()
+}
+
+#???????????ߵĺ???
+bioRiskPlot=function(inputFile=null, project=null){
+	rt=read.table(inputFile, header=T, sep="\t", check.names=F, row.names=1)    #??ȡ?????ļ?
+	rt=rt[order(rt$riskScore),]      #???ݲ??˵ķ??յ÷ֶ???Ʒ????????
+		
+	#???Ʒ???????
+	riskClass=rt[,"risk"]
+	lowLength=length(riskClass[riskClass=="low"])
+	highLength=length(riskClass[riskClass=="high"])
+	lowMax=max(rt$riskScore[riskClass=="low"])
+	line=rt[,"riskScore"]
+	line[line>10]=10
+	pdf(file=paste0(project, ".riskScore.pdf"), width=7, height=4)
+	plot(line, type="p", pch=20,
+		 xlab="Patients (increasing risk socre)",
+		 ylab="Risk score",
+		 col=c(rep("blue",lowLength),rep("red",highLength)) )
+	abline(h=lowMax,v=lowLength,lty=2)
+	legend("topleft", c("High risk","Low Risk"),bty="n",pch=19,col=c("red","blue"),cex=1.2)
+	dev.off()
+		
+	#????????״̬ͼ
+	color=as.vector(rt$fustat)
+	color[color==1]="red"
+	color[color==0]="blue"
+	pdf(file=paste0(project, ".survStat.pdf"), width=7, height=4)
+	plot(rt$futime, pch=19,
+		 xlab="Patients (increasing risk socre)",
+		 ylab="Survival time (years)",
+		 col=color)
+	legend("topleft", c("Dead","Alive"),bty="n",pch=19,col=c("red","blue"),cex=1.2)
+	abline(v=lowLength,lty=2)
+	dev.off()
+	
+	#??????ͼע?͵???ɫ
+	ann_colors=list()
+	bioCol=c("blue", "red")
+	names(bioCol)=c("low", "high")
+	ann_colors[["Risk"]]=bioCol
+
+	#???Ʒ?????ͼ
+	rt1=rt[c(3:(ncol(rt)-2))]
+	rt1=t(rt1)
+	annotation=data.frame(Risk=rt[,ncol(rt)])
+	rownames(annotation)=rownames(rt)
+	pdf(file=paste0(project, ".heatmap.pdf"), width=7, height=4)
+	pheatmap(rt1, 
+		     annotation=annotation,
+		     annotation_colors = ann_colors, 
+		     cluster_cols = FALSE,
+		     cluster_rows = FALSE,
+		     show_colnames = F,
+		     scale="row",
+		     color = colorRampPalette(c(rep("blue",3.5), "white", rep("red",3.5)))(50),
+		     fontsize_col=3,
+		     fontsize=7,
+		     fontsize_row=8)
+	dev.off()
+}
+
+############????ɭ??ͼ????############
+bioForest=function(coxFile=null, forestFile=null, forestCol=null){
+	#??ȡ?????ļ?
+	rt <- read.table(coxFile, header=T, sep="\t", check.names=F, row.names=1)
+	gene <- rownames(rt)
+	hr <- sprintf("%.3f",rt$"HR")
+	hrLow  <- sprintf("%.3f",rt$"HR.95L")
+	hrHigh <- sprintf("%.3f",rt$"HR.95H")
+	Hazard.ratio <- paste0(hr,"(",hrLow,"-",hrHigh,")")
+	pVal <- ifelse(rt$pvalue<0.001, "<0.001", sprintf("%.3f", rt$pvalue))
+		
+	#????ͼ??
+	pdf(file=forestFile, width=6.6, height=4.5)
+	n <- nrow(rt)
+	nRow <- n+1
+	ylim <- c(1,nRow)
+	layout(matrix(c(1,2),nc=2),width=c(3,2.5))
+		
+	#????ɭ??ͼ???ߵ??ٴ???Ϣ
+	xlim = c(0,3)
+	par(mar=c(4,2.5,2,1))
+	plot(1,xlim=xlim,ylim=ylim,type="n",axes=F,xlab="",ylab="")
+	text.cex=0.8
+	text(0,n:1,gene,adj=0,cex=text.cex)
+	text(1.5-0.5*0.2,n:1,pVal,adj=1,cex=text.cex);text(1.5-0.5*0.2,n+1,'pvalue',cex=text.cex,font=2,adj=1)
+	text(3.1,n:1,Hazard.ratio,adj=1,cex=text.cex);text(3.1,n+1,'Hazard ratio',cex=text.cex,font=2,adj=1)
+		
+	#?????ұߵ?ɭ??ͼ
+	par(mar=c(4,1,2,1),mgp=c(2,0.5,0))
+	xlim = c(0,max(as.numeric(hrLow),as.numeric(hrHigh)))
+	plot(1,xlim=xlim,ylim=ylim,type="n",axes=F,ylab="",xaxs="i",xlab="Hazard ratio")
+	arrows(as.numeric(hrLow),n:1,as.numeric(hrHigh),n:1,angle=90,code=3,length=0.05,col="darkblue",lwd=2.5)
+	abline(v=1,col="black",lty=2,lwd=2)
+	boxcolor = ifelse(as.numeric(hr) > 1, forestCol, forestCol)
+	points(as.numeric(hr), n:1, pch = 15, col = boxcolor, cex=1.5)
+	axis(1)
+	dev.off()
+}
+############????ɭ??ͼ????############
+
+############??????��Ԥ??????????#############
+indep=function(riskFile=null, cliFile=null, project=null){
+	risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)    #??ȡ?????ļ?
+	cli=read.table(cliFile, header=T, sep="\t", check.names=F, row.names=1)      #??ȡ?ٴ??ļ?
+	
+	#???ݺϲ?
+	sameSample=intersect(row.names(cli),row.names(risk))
+	risk=risk[sameSample,]
+	cli=cli[sameSample,]
+	rt=cbind(futime=risk[,1], fustat=risk[,2], cli, riskScore=risk[,(ncol(risk)-1)])
+	
+	#?????ض?��Ԥ??????
+	uniCoxFile=paste0(project,".uniCox.txt")
+	uniCoxPdf=paste0(project,".uniCox.pdf")
+	uniTab=data.frame()
+	for(i in colnames(rt[,3:ncol(rt)])){
+		 cox <- coxph(Surv(futime, fustat) ~ rt[,i], data = rt)
+		 coxSummary = summary(cox)
+		 uniTab=rbind(uniTab,
+		              cbind(id=i,
+		              HR=coxSummary$conf.int[,"exp(coef)"],
+		              HR.95L=coxSummary$conf.int[,"lower .95"],
+		              HR.95H=coxSummary$conf.int[,"upper .95"],
+		              pvalue=coxSummary$coefficients[,"Pr(>|z|)"])
+		              )
+	}
+	write.table(uniTab,file=uniCoxFile,sep="\t",row.names=F,quote=F)
+	bioForest(coxFile=uniCoxFile, forestFile=uniCoxPdf, forestCol="green")
+#2B5F75#?????ض?��Ԥ??????
+	multiCoxFile=paste0(project,".multiCox.txt")
+	multiCoxPdf=paste0(project,".multiCox.pdf")
+	uniTab=uniTab[as.numeric(uniTab[,"pvalue"])<1,]
+	rt1=rt[,c("futime","fustat",as.vector(uniTab[,"id"]))]
+	multiCox=coxph(Surv(futime, fustat) ~ ., data = rt1)
+	multiCoxSum=summary(multiCox)
+	multiTab=data.frame()
+	multiTab=cbind(
+	             HR=multiCoxSum$conf.int[,"exp(coef)"],
+	             HR.95L=multiCoxSum$conf.int[,"lower .95"],
+	             HR.95H=multiCoxSum$conf.int[,"upper .95"],
+	             pvalue=multiCoxSum$coefficients[,"Pr(>|z|)"])
+	multiTab=cbind(id=row.names(multiTab),multiTab)
+	write.table(multiTab, file=multiCoxFile, sep="\t", row.names=F, quote=F)
+	bioForest(coxFile=multiCoxFile, forestFile=multiCoxPdf, forestCol="red")
+}
+############??????��Ԥ??????????#############
+
+riskFile="risk.all.txt"     #?????ļ?
+cliFile="clinical.txt"      #?ٴ??????ļ?
+setwd("G:\\BaiduNetdiskDownload\\BaiduNetdiskWorkspace\\生信文章\\微生物组\\19.ROC")     #?޸Ĺ???Ŀ¼
+
+#??ȡ?????????ļ?
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+risk=risk[,c("futime", "fustat", "riskScore")]
+
+#??ȡ?ٴ??????ļ?
+cli=read.table(cliFile, header=T, sep="\t", check.names=F, row.names=1)
+
+#?ϲ?????
+samSample=intersect(row.names(risk), row.names(cli))
+risk1=risk[samSample,,drop=F]
+cli=cli[samSample,,drop=F]
+rt=cbind(risk1, cli)
+
+#????ROC???ߵ???ɫ
+bioCol=rainbow(ncol(rt)-1, s=0.9, v=0.9)
+
+
+######????1 3 5????ROC????######
+ROC_rt=timeROC(T=risk$futime,delta=risk$fustat,
+	           marker=risk$riskScore,cause=1,
+	           weighting='aalen',
+	           times=c(1,3,5),ROC=TRUE)
+pdf(file="ROC.all.pdf", width=5, height=5)
+plot(ROC_rt,time=1,col=c("#D75455"),title=FALSE,lwd=2)
+plot(ROC_rt,time=3,col=c("#90B44B"),add=TRUE,title=FALSE,lwd=2)
+plot(ROC_rt,time=5,col=c("#268785"),add=TRUE,title=FALSE,lwd=2)
+legend('bottomright',
+	   c(paste0('AUC at 1 years: ',sprintf("%.03f",ROC_rt$AUC[1])),
+	     paste0('AUC at 3 years: ',sprintf("%.03f",ROC_rt$AUC[2])),
+	     paste0('AUC at 5 years: ',sprintf("%.03f",ROC_rt$AUC[3]))),
+	   col=c("#D75455","#90B44B","#268785"), lwd=2, bty = 'n')
+dev.off()
+
+
+
+
+########################################################
+
+
+
+######?????ٴ???ROC????######
+predictTime=1     #????Ԥ??????
+aucText=c()
+pdf(file="cliROC.pdf", width=5, height=5)
+#???Ʒ??յ÷ֵ?ROC????
+i=3
+ROC_rt=timeROC(T=risk$futime,
+               delta=risk$fustat,
+               marker=risk$riskScore, cause=1,
+               weighting='aalen',
+               times=c(predictTime),ROC=TRUE)
+plot(ROC_rt, time=predictTime, col=bioCol[i-2], title=FALSE, lwd=2)
+aucText=c(paste0("Risk", ", AUC=", sprintf("%.3f",ROC_rt$AUC[2])))
+abline(0,1)
+#???ٴ????ݽ???ѭ?????????ٴ????ݵ?ROC????
+for(i in 4:ncol(rt)){
+	ROC_rt=timeROC(T=rt$futime,
+				   delta=rt$fustat,
+				   marker=rt[,i], cause=1,
+				   weighting='aalen',
+				   times=c(predictTime),ROC=TRUE)
+	plot(ROC_rt, time=predictTime, col=bioCol[i-2], title=FALSE, lwd=2, add=TRUE)
+	aucText=c(aucText, paste0(colnames(rt)[i],", AUC=",sprintf("%.3f",ROC_rt$AUC[2])))
+}
+#????ͼ?????õ?????ROC?????µ?????
+legend("bottomright", aucText,lwd=2,bty="n",col=bioCol[1:(ncol(rt)-1)])
+dev.off()
+
+library(limma)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(enrichplot)
+
+expFile="symbol.txt"        #?????????ļ?
+riskFile="risk.all.txt"     #?????ļ?
+gmtFile="c2.cp.kegg.symbols.gmt"     #???????ļ?
+setwd("C:\\Users\\lexb\\Desktop\\proteome\\28.GSEA")     #???ù???Ŀ¼
+
+#??ȡ?ļ?,?????????ļ?????????
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+data=data[rowMeans(data)>0.5,]
+
+#ɾ????????Ʒ
+group=sapply(strsplit(colnames(data),"\\-"), "[", 4)
+group=sapply(strsplit(group,""), "[", 1)
+group=gsub("2", "1", group)
+data=data[,group==0]
+data=t(data)
+rownames(data)=gsub("(.*?)\\-(.*?)\\-(.*?)\\-.*", "\\1\\-\\2\\-\\3", rownames(data))
+data=t(avereps(data))
+
+#??ȡ?????ļ?
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+sameSample=intersect(row.names(risk), colnames(data))
+risk=risk[sameSample,]
+data=data[,sameSample]
+
+#?ߵͷ??ձȽϣ??õ?logFC
+dataL=data[,row.names(risk[risk[,"risk"]=="low",])]
+dataH=data[,row.names(risk[risk[,"risk"]=="high",])]
+meanL=rowMeans(dataL)
+meanH=rowMeans(dataH)
+meanL[meanL<0.00001]=0.00001
+meanH[meanH<0.00001]=0.00001
+logFC=log2(meanH)-log2(meanL)
+logFC=sort(logFC,decreasing=T)
+genes=names(logFC)
+
+#??ȡ???????ļ?
+gmt=read.gmt(gmtFile)
+
+#GSEA????????
+kk=GSEA(logFC, TERM2GENE=gmt, pvalueCutoff=1, minGSSize=15, maxGSSize=500)
+kkTab=as.data.frame(kk)
+kkTab=kkTab[kkTab$pvalue<0.05,]
+write.table(kkTab,file="GSEA.result.txt",sep="\t",quote=F,row.names = F)
+	
+#?????߷??ո?????ͼ??
+termNum=5     #????չʾͨ·????Ŀ??չʾǰ5??ͨ·
+kkUp=kkTab[kkTab$NES>0,]
+if(nrow(kkUp)>=termNum){
+	showTerm=row.names(kkUp)[1:termNum]
+	gseaplot=gseaplot2(kk, showTerm, base_size=8, title="Enriched in high risk group")
+	pdf(file="GSEA.highrisk.pdf", width=7, height=5.5)
+	print(gseaplot)
+	dev.off()
+}
+
+#?????ͷ??ո?????ͼ??
+termNum=5     #????չʾͨ·????Ŀ??չʾǰ5??ͨ·
+kkDown=kkTab[kkTab$NES<0,]
+if(nrow(kkDown)>=termNum){
+	showTerm=row.names(kkDown)[1:termNum]
+	gseaplot=gseaplot2(kk, showTerm, base_size=8, title="Enriched in low risk group")
+	pdf(file="GSEA.lowrisk.pdf", width=7, height=5.5)
+	print(gseaplot)
+	dev.off()
+}
+
+
 
